@@ -290,7 +290,8 @@ export default class Version extends BitObject {
   validateBeforePersisting(versionStr: string): void {
     logger.debug('validating version object: ', this.hash().hash);
     const version = Version.parse(versionStr);
-    version.validate();
+    const validateOptions = R.pathOr({}, ['version'], this.validateOptions);
+    version.validate(validateOptions);
   }
 
   toBuffer(pretty: boolean): Buffer {
@@ -487,9 +488,10 @@ export default class Version extends BitObject {
    * Validate the version model properties, to make sure we are not inserting something
    * in the wrong format
    */
-  validate(): void {
+  validate(validateOptions): void {
     const message = 'unable to save Version object';
-    const validateBitIdStr = (bitIdStr: string, field: string) => {
+    const validateBitIdStr = (bitIdStr: string, field: string, options: Object) => {
+      const validateVersion = !R.pathOr(false, ['version', 'skip'], options);
       validateType(message, bitIdStr, field, 'string');
       let bitId;
       try {
@@ -497,13 +499,13 @@ export default class Version extends BitObject {
       } catch (err) {
         throw new VersionInvalid(`${message}, the ${field} has an invalid Bit id`);
       }
-      if (!bitId.hasVersion()) throw new VersionInvalid(`${message}, the ${field} ${bitIdStr} does not have a version`);
+      if (validateVersion && !bitId.hasVersion()) { throw new VersionInvalid(`${message}, the ${field} ${bitIdStr} does not have a version`); }
       if (!bitId.scope) throw new VersionInvalid(`${message}, the ${field} ${bitIdStr} does not have a scope`);
     };
-    const _validateEnv = (env) => {
+    const _validateEnv = (env, options = {}) => {
       if (!env) return;
       if (typeof env === 'string') {
-        validateBitIdStr(env, 'environment-id');
+        validateBitIdStr(env, 'environment-id', options);
         return;
       }
       validateType(message, env, 'env', 'object');
@@ -579,8 +581,10 @@ export default class Version extends BitObject {
     if (duplicateFiles.length) {
       throw new VersionInvalid(`${message} the following files are duplicated ${duplicateFiles.join(', ')}`);
     }
-    _validateEnv(this.compiler);
-    _validateEnv(this.tester);
+    const compilerValidationOptions = R.pathOr({}, ['compiler'], validateOptions);
+    const testerValidationOptions = R.pathOr({}, ['tester'], validateOptions);
+    _validateEnv(this.compiler, compilerValidationOptions);
+    _validateEnv(this.tester, testerValidationOptions);
     _validatePackageDependencies(this.packageDependencies);
     _validatePackageDependencies(this.devPackageDependencies);
     _validatePackageDependencies(this.peerPackageDependencies);

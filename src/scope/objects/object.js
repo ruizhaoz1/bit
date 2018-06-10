@@ -18,6 +18,7 @@ function parse(buffer: Buffer, types: { [string]: Function }): BitObject {
 
 export default class BitObject {
   validateBeforePersist: boolean = true; // validate the object before persisting
+  validateOptions: Object = {}; // validation options
   id(): string | Buffer {
     throw new Error('id() was not implemented...');
   }

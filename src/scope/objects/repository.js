@@ -186,11 +186,16 @@ export default class Repository {
     return Promise.all(refs.map(ref => this.load(ref)));
   }
 
-  persist(validate: boolean = true): Promise<boolean[]> {
+  persist(validate: boolean = true, validateOptions: Object = {}): Promise<boolean[]> {
     logger.debug(`repository: persisting ${this.objects.length} objects, with validate = ${validate.toString()}`);
     // @TODO handle failures
-    if (!validate) this.objects.map(object => (object.validateBeforePersist = false));
-    return Promise.all(this.objects.map(object => this.persistOne(object)));
+    return Promise.all(
+      this.objects.map((object) => {
+        object.validateBeforePersist = validate;
+        object.validateOptions = validateOptions;
+        return this.persistOne(object);
+      })
+    );
   }
 
   persistOne(object: BitObject): Promise<boolean> {

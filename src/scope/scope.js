@@ -358,21 +358,30 @@ export default class Scope {
   /**
    * Writes components as objects into the 'objects' directory
    */
-  async writeManyComponentsToModel(componentsObjects: ComponentObjects[], persist: boolean = true): Promise<any> {
+  async writeManyComponentsToModel(
+    componentsObjects: ComponentObjects[],
+    persist: boolean = true,
+    validate: boolean = true,
+    validateOptions: Object = {}
+  ): Promise<any> {
     const manyObjects = componentsObjects.map(componentObjects => componentObjects.toObjects(this.objects));
     logger.debug(
       `writeComponentToModel, writing into the model, ids: ${manyObjects
         .map(objects => objects.component.id())
-        .join(', ')}. They might have dependencies which are going to be written too`
+        .join(', ')}. validate: ${validate.toString()}, validateOptions: ${JSON.stringify(
+        validateOptions
+      )}, They might have dependencies which are going to be written too`
     );
     Analytics.addBreadCrumb(
       'writeManyComponentsToModel',
       `writeComponentToModel, writing into the model, ids: ${Analytics.hashData(
         manyObjects.map(objects => objects.component.id()).join(', ')
-      )}. They might have dependencies which are going to be written too`
+      )}. validate: ${validate.toString()}, validateOptions: ${JSON.stringify(
+        validateOptions
+      )}, They might have dependencies which are going to be written too`
     );
     await Promise.all(manyObjects.map(objects => this.sources.merge(objects)));
-    return persist ? this.objects.persist() : Promise.resolve();
+    return persist ? this.objects.persist(validate, validateOptions) : Promise.resolve();
   }
 
   /**
@@ -563,7 +572,23 @@ export default class Scope {
         .then((componentObjects) => {
           logger.debug('getExternalMany: writing them to the model');
           Analytics.addBreadCrumb('getExternalMany', 'getExternalMany: writing them to the model');
-          return this.writeManyComponentsToModel(componentObjects, persist);
+          // Skip validation of compiler / tester id has version for backward compatibility (support old cases where latest was allowed in compiler / tester)
+          // This won't allow to tag a new version with this config, but only to import it so you can fix it
+          const validateOptions = {
+            version: {
+              compiler: {
+                version: {
+                  skip: true
+                }
+              },
+              tester: {
+                version: {
+                  skip: true
+                }
+              }
+            }
+          };
+          return this.writeManyComponentsToModel(componentObjects, persist, true, validateOptions);
         })
         .then(() => this.getExternalMany(ids, remotes));
     });

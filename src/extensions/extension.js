@@ -2,7 +2,7 @@
 
 import R from 'ramda';
 import BaseExtension from './base-extension';
-import type { BaseExtensionProps, BaseLoadArgsProps, BaseExtensionOptions } from './base-extension';
+import type { BaseExtensionProps, BaseLoadArgsProps } from './base-extension';
 import logger from '../logger/logger';
 import ExtensionCommand from './extension-command';
 import IsolatedEnvironment from '../environment';
@@ -32,11 +32,6 @@ type ExtensionProps = BaseExtensionProps & {
   newHooks?: string[],
   registeredHooksActions?: RegisteredHooksActions,
   commands?: Array<Commands>
-};
-
-export type ExtensionOptions = BaseExtensionOptions & {
-  core?: boolean,
-  disabled?: boolean
 };
 
 export type LoadArgsProps = BaseLoadArgsProps;
@@ -120,7 +115,6 @@ export default class Extension extends BaseExtension {
   // $FlowFixMe
   static async load(props: LoadArgsProps): Promise<Extension> {
     props.rawConfig = props.rawConfig || {};
-    props.options = props.options || {};
     const baseExtensionProps: BaseExtensionProps = await super.load(props);
     // const extensionProps: ExtensionProps = ((await super.load(props): BaseExtensionProps): ExtensionProps);
     // const extensionProps: ExtensionProps = (baseExtensionProps: ExtensionProps);

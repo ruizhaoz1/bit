@@ -37,8 +37,6 @@ type EnvExtensionExtraProps = {
   dynamicPackageDependencies?: ?Object
 };
 
-export type EnvExtensionOptions = BaseExtensionOptions;
-
 export type EnvLoadArgsProps = BaseLoadArgsProps &
   EnvExtensionExtraProps & {
     bitJsonPath: PathOsBased,

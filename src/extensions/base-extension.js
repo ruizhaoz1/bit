@@ -9,31 +9,25 @@ import logger, { createExtensionLogger } from '../logger/logger';
 import { Scope } from '../scope';
 import { ScopeNotFound } from '../scope/exceptions';
 import { BitId } from '../bit-id';
-import type { EnvExtensionOptions } from './env-extension';
-import type { ExtensionOptions } from './extension';
 import ExtensionNameNotValid from './exceptions/extension-name-not-valid';
 import type { PathOsBased } from '../utils/path';
 import { Analytics } from '../analytics/analytics';
 import ExtensionLoadError from './exceptions/extension-load-error';
 import Environment from '../environment';
 import ExtensionSchemaError from './exceptions/extension-schema-error';
+import { FILE_PROTOCOL_PREFIX } from '../constants';
+import ExtensionConfig from './extension-config';
 
 const ajv = new Ajv();
 
 const CORE_EXTENSIONS_PATH = './core-extensions';
 
-export type BaseExtensionOptions = {
-  file?: ?string
-};
-
 type BaseArgs = {
-  name: string,
-  rawConfig: Object,
-  // options: BaseExtensionOptions
-  options: ExtensionOptions | EnvExtensionOptions
+  name: string
 };
 
 export type BaseLoadArgsProps = BaseArgs & {
+  rawConfig: Object,
   consumerPath?: ?PathOsBased,
   scopePath?: ?PathOsBased,
   context?: ?Object,
@@ -41,18 +35,18 @@ export type BaseLoadArgsProps = BaseArgs & {
 };
 
 type BaseLoadFromFileArgsProps = BaseArgs & {
+  config: ExtensionConfig,
   filePath: string,
   rootDir?: string,
   throws?: boolean
 };
 
 type StaticProps = BaseArgs & {
-  dynamicConfig: Object,
+  config: ExtensionConfig,
   filePath: string,
   rootDir?: ?string,
   schema?: ?Object,
   script?: Function,
-  disabled: boolean,
   loaded: boolean,
   context?: ?Object
 };
@@ -86,32 +80,26 @@ export type InitOptions = {
 
 export default class BaseExtension {
   name: string;
+  filePath: string;
   loaded: boolean;
   initialized: boolean;
-  disabled: boolean;
-  filePath: string;
+  config: ExtensionConfig;
   rootDir: string;
-  rawConfig: Object;
   schema: ?Object;
-  options: Object;
-  dynamicConfig: Object;
   context: ?Object;
-  script: ?Function; // Store the required plugin
-  _initOptions: ?InitOptions; // Store the required plugin
+  script: ?Function;
+  _initOptions: ?InitOptions;
   api = _getConcreteBaseAPI({ name: this.name });
 
   constructor(extensionProps: BaseExtensionProps) {
     this.name = extensionProps.name;
-    this.rawConfig = extensionProps.rawConfig;
+    this.loaded = extensionProps.loaded;
+    this.filePath = extensionProps.filePath;
+    this.config = extensionProps.config;
     this.schema = extensionProps.schema;
-    this.options = extensionProps.options;
-    this.dynamicConfig = extensionProps.dynamicConfig || extensionProps.rawConfig;
     this.context = extensionProps.context;
     this.script = extensionProps.script;
-    this.disabled = extensionProps.disabled;
-    this.filePath = extensionProps.filePath;
     this.rootDir = extensionProps.rootDir || '';
-    this.loaded = extensionProps.loaded;
     this.api = extensionProps.api;
   }
 
@@ -150,8 +138,8 @@ export default class BaseExtension {
       let initOptions = {};
       if (this.script && this.script.init && typeof this.script.init === 'function') {
         initOptions = await this.script.init({
-          rawConfig: this.rawConfig,
-          dynamicConfig: this.dynamicConfig,
+          rawConfig: this.config.extensionRawConfig,
+          dynamicConfig: this.config.extensionDynamicConfig,
           api: this.api
         });
       }
@@ -180,17 +168,14 @@ export default class BaseExtension {
 
   toBitJsonObject() {
     return {
-      [this.name]: {
-        rawConfig: this.rawConfig,
-        options: this.options
-      }
+      [this.name]: this.config.toBitJsonObject
     };
   }
 
   toModelObject() {
     return {
       name: this.name,
-      config: this.dynamicConfig
+      config: this.config.extensionDynamicConfig
     };
   }
 
@@ -204,30 +189,29 @@ export default class BaseExtension {
    */
   async reload(scopePath: string, { throws }: Object): Promise<void> {
     Analytics.addBreadCrumb('base-extension', 'reload extension');
-    if (!this.filePath && !this.options.core) {
-      const { resolvedPath, componentPath } = _getExtensionPath(this.name, scopePath, this.options.core);
+    if (!this.filePath && !this.config.core) {
+      const { resolvedPath, componentPath } = _getExtensionPath(this.name, scopePath, !!this.config.core);
       this.filePath = resolvedPath;
       this.rootDir = componentPath;
     }
-    this.name = _addVersionToNameFromPathIfMissing(this.name, this.rootDir, this.options);
+    this.name = _addVersionToNameFromPathIfMissing(this.name, this.rootDir, !!this.config.core);
     const baseProps = await BaseExtension.loadFromFile({
       name: this.name,
       filePath: this.filePath,
       rootDir: this.rootDir,
-      rawConfig: this.rawConfig,
-      options: this.options,
+      config: this.config,
       throws
     });
     if (baseProps.loaded) {
       this.loaded = baseProps.loaded;
       this.script = baseProps.script;
-      this.dynamicConfig = baseProps.dynamicConfig;
+      this.config = baseProps.config;
       this.init();
     }
   }
 
   setExtensionPathInScope(scopePath: string): void {
-    const { resolvedPath, componentPath } = _getExtensionPath(this.name, scopePath, this.options.core);
+    const { resolvedPath, componentPath } = _getExtensionPath(this.name, scopePath, this.config.core);
     this.filePath = resolvedPath;
     this.rootDir = componentPath;
   }
@@ -242,19 +226,16 @@ export default class BaseExtension {
   /**
    * Load extension by name
    * The extension will be from scope by default or from file
-   * if there is file(path) in the options
+   * if the name is start with file://
    * The file path is relative to the bit.json of the project or absolute
    * @param {string} name - name of the extension
    * @param {Object} rawConfig - raw config for the extension
-   * @param {Object} options - extension options such as - disabled, file, core
    * @param {string} consumerPath - path to the consumer folder (to load the file relatively)
    * @param {string} scopePath - scope which stores the extension code
    */
   static async load({
     name,
     rawConfig = {},
-    // $FlowFixMe
-    options = {},
     consumerPath,
     scopePath,
     throws = false,
@@ -263,17 +244,17 @@ export default class BaseExtension {
     Analytics.addBreadCrumb('base-extension', 'load extension');
     logger.debug(`base-extension loading ${name}`);
     const concreteBaseAPI = _getConcreteBaseAPI({ name });
-    if (options.file) {
-      let absPath = options.file;
-      const file = options.file || '';
-      if (!path.isAbsolute(options.file) && consumerPath) {
+    const config = ExtensionConfig.fromRawConfig(rawConfig);
+    if (_isFileProtocol(name)) {
+      let absPath = _extractFileFromName(name);
+      const file = absPath || '';
+      if (!path.isAbsolute(absPath) && consumerPath) {
         absPath = path.resolve(consumerPath, file);
       }
       const staticExtensionProps: StaticProps = await BaseExtension.loadFromFile({
         name,
         filePath: absPath,
-        rawConfig,
-        options,
+        config,
         throws
       });
       const extensionProps: BaseExtensionProps = { api: concreteBaseAPI, context, ...staticExtensionProps };
@@ -282,24 +263,20 @@ export default class BaseExtension {
     }
     let staticExtensionProps: StaticProps = {
       name,
-      rawConfig,
-      dynamicConfig: rawConfig,
-      options,
-      disabled: false,
+      config: ExtensionConfig.fromRawConfig(rawConfig),
       loaded: false,
       filePath: ''
     };
     // Require extension from scope
     if (scopePath) {
       // $FlowFixMe
-      const { resolvedPath, componentPath } = _getExtensionPath(name, scopePath, options.core);
-      const nameWithVersion = _addVersionToNameFromPathIfMissing(name, componentPath, options);
+      const { resolvedPath, componentPath } = _getExtensionPath(name, scopePath, config.core);
+      const nameWithVersion = _addVersionToNameFromPathIfMissing(name, componentPath, !!config.core);
       staticExtensionProps = await BaseExtension.loadFromFile({
         name: nameWithVersion,
         filePath: resolvedPath,
         rootDir: componentPath,
-        rawConfig,
-        options,
+        config,
         throws
       });
     }
@@ -314,7 +291,7 @@ export default class BaseExtension {
       staticExtensionProps = {
         name: modelObject,
         rawConfig: {},
-        dynamicConfig: {},
+        config: {},
         options: {},
         disabled: false,
         loaded: false,
@@ -324,7 +301,7 @@ export default class BaseExtension {
       staticExtensionProps = {
         name: modelObject.name,
         rawConfig: modelObject.config,
-        dynamicConfig: modelObject.config,
+        config: modelObject.config,
         options: {},
         disabled: false,
         loaded: false,
@@ -341,26 +318,20 @@ export default class BaseExtension {
     name,
     filePath,
     rootDir,
-    rawConfig = {},
-    // $FlowFixMe
-    options = {},
+    config,
     throws = false
   }: BaseLoadFromFileArgsProps): Promise<StaticProps> {
     logger.debug(`loading extension ${name} from ${filePath}`);
     Analytics.addBreadCrumb('base-extension', 'load extension from file');
     const extensionProps: StaticProps = {
       name,
-      rawConfig,
-      dynamicConfig: rawConfig,
-      options,
-      disabled: false,
+      config,
       loaded: false,
       filePath: '',
       rootDir: ''
     };
     // Skip disabled extensions
-    if (options.disabled) {
-      extensionProps.disabled = true;
+    if (config.disabled) {
       logger.info(`skip extension ${extensionProps.name} because it is disabled`);
       extensionProps.loaded = false;
       return extensionProps;
@@ -371,7 +342,7 @@ export default class BaseExtension {
     if (!isFileExist) {
       // Do not throw an error if the file not exist since we will install it later
       // unless you specify the options.file which means you want a specific file which won't be installed automatically later
-      if (throws && options.file) {
+      if (throws && filePath) {
         const err = new Error(`the file ${filePath} not found`);
         throw new ExtensionLoadError(err, extensionProps.name);
       }
@@ -388,13 +359,15 @@ export default class BaseExtension {
       extensionProps.script = script.default ? script.default : script;
       if (extensionProps.script.getSchema && typeof extensionProps.script.getSchema === 'function') {
         extensionProps.schema = await extensionProps.script.getSchema();
-        const valid = ajv.validate(extensionProps.schema, rawConfig);
+        const valid = ajv.validate(extensionProps.schema, config.extensionRawConfig);
         if (!valid) {
           throw new ExtensionSchemaError(name, ajv.errorsText());
         }
       }
-      if (extensionProps.script.getDynamicConfig && typeof extensionProps.script.getDynamicConfig === 'function') {
-        extensionProps.dynamicConfig = await extensionProps.script.getDynamicConfig({ rawConfig });
+      if (extensionProps.script.getConfig && typeof extensionProps.script.getConfig === 'function') {
+        config.extensionDynamicConfig = await extensionProps.script.getDynamicConfig({
+          rawConfig: config.extensionRawConfig
+        });
       }
       // Make sure to not kill the process if an extension didn't load correctly
     } catch (err) {
@@ -419,6 +392,22 @@ export default class BaseExtension {
     return extensionProps;
   }
 }
+
+const baseApi = {
+  /**
+   * API to get logger
+   */
+  getLogger: (name): Function => () => createExtensionLogger(name)
+};
+
+/**
+ * Function which get actual params and return a concrete base api
+ */
+const _getConcreteBaseAPI = ({ name }: { name: string }) => {
+  const concreteBaseAPI = R.clone(baseApi);
+  concreteBaseAPI.getLogger = baseApi.getLogger(name);
+  return concreteBaseAPI;
+};
 
 const _getExtensionPath = (name: string, scopePath: ?string, isCore: boolean = false): ExtensionPath => {
   if (isCore) {
@@ -476,8 +465,9 @@ const _getExtensionVersionFromComponentPath = (componentPath: string): ?string =
   return version;
 };
 
-const _addVersionToNameFromPathIfMissing = (name: string, componentPath: string, options: Object): string => {
-  if (options && options.core) return name; // if it's a core extension, it's not a bit-id.
+const _addVersionToNameFromPathIfMissing = (name: string, componentPath: string, isCore: boolean = false): string => {
+  if (isCore) return name; // if it's a core extension, it's not a bit-id.
+  if (_isFileProtocol(name)) return name; // if it's a file protocol there is no meaning to the version
   let bitId: BitId;
   try {
     bitId = BitId.parse(name, true); // @todo: make sure it always has a scope name
@@ -491,18 +481,17 @@ const _addVersionToNameFromPathIfMissing = (name: string, componentPath: string,
   return name;
 };
 
-const baseApi = {
-  /**
-   * API to get logger
-   */
-  getLogger: (name): Function => () => createExtensionLogger(name)
+/**
+ * Check if the extension name is in file protocol
+ */
+const _isFileProtocol = (name: string): boolean => {
+  return name.startsWith(FILE_PROTOCOL_PREFIX);
 };
 
 /**
- * Function which get actual params and return a concrete base api
+ * Get the actual file from name with file protocol (remove the file://)
+ * @param {*} name
  */
-const _getConcreteBaseAPI = ({ name }: { name: string }) => {
-  const concreteBaseAPI = R.clone(baseApi);
-  concreteBaseAPI.getLogger = baseApi.getLogger(name);
-  return concreteBaseAPI;
+const _extractFileFromName = (name: string): string => {
+  return name.replace(FILE_PROTOCOL_PREFIX, '');
 };

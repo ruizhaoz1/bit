@@ -63,8 +63,7 @@ const _loadExtension = (consumerPath: ?string, scopePath: ?string) => (
 ): Promise<Extension> => {
   const loadArgs: LoadArgsProps = {
     name,
-    rawConfig: rawConfig.config,
-    options: rawConfig.options,
+    rawConfig,
     consumerPath,
     scopePath
   };

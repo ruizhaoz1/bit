@@ -4,6 +4,7 @@ import { getScopeComponent } from './api/consumer/index';
 import { scopeList } from './api/scope/index';
 import Extension from './extensions/extension';
 import HooksManager from './hooks';
+import ExtensionConfig from './extensions/extension-config';
 
 HooksManager.init();
 
@@ -22,14 +23,13 @@ module.exports = {
   loadExtension: async (
     extensionName: string,
     extensionFilePath: string,
-    extensionConfig: Object,
-    extensionOptions: Object
+    extensionRawConfig: Object
   ): Promise<Extension> => {
+    const config = ExtensionConfig.fromRawConfig(extensionRawConfig);
     const extension = await Extension.loadFromFile({
       name: extensionName,
       filePath: extensionFilePath,
-      rawConfig: extensionConfig,
-      options: extensionOptions
+      config
     });
     return Promise.resolve(extension);
   }
